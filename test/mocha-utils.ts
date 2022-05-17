@@ -64,8 +64,8 @@ const product =
 
 const alternativeInstall = process.env.PUPPETEER_ALT_INSTALL || false;
 
-const isHeadless =
-  (process.env.HEADLESS || 'true').trim().toLowerCase() === 'true';
+const headless = (process.env.HEADLESS || 'true').trim().toLowerCase();
+const isHeadless = headless === 'true' || headless === 'chrome';
 const isFirefox = product === 'firefox';
 const isChrome = product === 'Chromium';
 
@@ -82,7 +82,7 @@ const defaultBrowserOptions = Object.assign(
   {
     handleSIGINT: true,
     executablePath: process.env.BINARY,
-    headless: isHeadless,
+    headless: headless === 'chrome' ? ('chrome' as const) : isHeadless,
     dumpio: !!process.env.DUMPIO,
   },
   extraLaunchOptions
@@ -318,4 +318,18 @@ export const expectCookieEquals = (
   }
 
   expect(cookies).toEqual(expectedCookies);
+};
+
+export const shortWaitForArrayToHaveAtLeastNElements = async (
+  data: unknown[],
+  minLength: number,
+  attempts = 3,
+  timeout = 50
+): Promise<void> => {
+  for (let i = 0; i < attempts; i++) {
+    if (data.length >= minLength) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, timeout));
+  }
 };

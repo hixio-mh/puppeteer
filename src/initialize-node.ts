@@ -16,12 +16,12 @@
 
 import { PuppeteerNode } from './node/Puppeteer.js';
 import { PUPPETEER_REVISIONS } from './revisions.js';
-import pkgDir from 'pkg-dir';
+import { sync } from 'pkg-dir';
 import { Product } from './common/Product.js';
+import { rootDirname } from './constants.js';
 
 export const initializePuppeteerNode = (packageName: string): PuppeteerNode => {
-  const puppeteerRootDirectory = pkgDir.sync(__dirname);
-
+  const puppeteerRootDirectory = sync(rootDirname);
   let preferredRevision = PUPPETEER_REVISIONS.chromium;
   const isPuppeteerCore = packageName === 'puppeteer-core';
   // puppeteer-core ignores environment variables

@@ -64,7 +64,6 @@ export class LifecycleWatcher {
   _timeout: number;
   _navigationRequest?: HTTPRequest;
   _eventListeners: PuppeteerEventListener[];
-  _initialLoaderId: string;
 
   _sameDocumentNavigationPromise: Promise<Error | null>;
   _sameDocumentNavigationCompleteCallback: (x?: Error) => void;
@@ -82,6 +81,8 @@ export class LifecycleWatcher {
 
   _maximumTimer?: NodeJS.Timeout;
   _hasSameDocumentNavigation?: boolean;
+  _newDocumentNavigation?: boolean;
+  _swapped?: boolean;
 
   constructor(
     frameManager: FrameManager,
@@ -99,7 +100,6 @@ export class LifecycleWatcher {
 
     this._frameManager = frameManager;
     this._frame = frame;
-    this._initialLoaderId = frame._loaderId;
     this._timeout = timeout;
     this._navigationRequest = null;
     this._eventListeners = [
@@ -120,6 +120,16 @@ export class LifecycleWatcher {
         this._frameManager,
         FrameManagerEmittedEvents.FrameNavigatedWithinDocument,
         this._navigatedWithinDocument.bind(this)
+      ),
+      helper.addEventListener(
+        this._frameManager,
+        FrameManagerEmittedEvents.FrameNavigated,
+        this._navigated.bind(this)
+      ),
+      helper.addEventListener(
+        this._frameManager,
+        FrameManagerEmittedEvents.FrameSwapped,
+        this._frameSwapped.bind(this)
       ),
       helper.addEventListener(
         this._frameManager,
@@ -171,7 +181,8 @@ export class LifecycleWatcher {
     this._checkLifecycleComplete();
   }
 
-  navigationResponse(): HTTPResponse | null {
+  async navigationResponse(): Promise<HTTPResponse | null> {
+    // We may need to wait for ExtraInfo events before the request is complete.
     return this._navigationRequest ? this._navigationRequest.response() : null;
   }
 
@@ -210,18 +221,25 @@ export class LifecycleWatcher {
     this._checkLifecycleComplete();
   }
 
+  _navigated(frame: Frame): void {
+    if (frame !== this._frame) return;
+    this._newDocumentNavigation = true;
+    this._checkLifecycleComplete();
+  }
+
+  _frameSwapped(frame: Frame): void {
+    if (frame !== this._frame) return;
+    this._swapped = true;
+    this._checkLifecycleComplete();
+  }
+
   _checkLifecycleComplete(): void {
     // We expect navigation to commit.
     if (!checkLifecycle(this._frame, this._expectedLifecycle)) return;
     this._lifecycleCallback();
-    if (
-      this._frame._loaderId === this._initialLoaderId &&
-      !this._hasSameDocumentNavigation
-    )
-      return;
     if (this._hasSameDocumentNavigation)
       this._sameDocumentNavigationCompleteCallback();
-    if (this._frame._loaderId !== this._initialLoaderId)
+    if (this._swapped || this._newDocumentNavigation)
       this._newDocumentNavigationCompleteCallback();
 
     /**
@@ -237,7 +255,12 @@ export class LifecycleWatcher {
         if (!frame._lifecycleEvents.has(event)) return false;
       }
       for (const child of frame.childFrames()) {
-        if (!checkLifecycle(child, expectedLifecycle)) return false;
+        if (
+          child._hasStartedLoading &&
+          !checkLifecycle(child, expectedLifecycle)
+        ) {
+          return false;
+        }
       }
       return true;
     }

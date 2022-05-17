@@ -1795,7 +1795,7 @@ export class Page extends EventEmitter {
    *   more than 2 network connections for at least `500` ms.
    */
   async reload(options?: WaitForOptions): Promise<HTTPResponse | null> {
-    const result = await Promise.all<HTTPResponse, void>([
+    const result = await Promise.all([
       this.waitForNavigation(options),
       this._client.send('Page.reload'),
     ]);
@@ -2039,7 +2039,7 @@ export class Page extends EventEmitter {
       return false;
     }
 
-    return Promise.race([
+    const eventRace = Promise.race([
       helper.waitForEvent(
         this._frameManager,
         FrameManagerEmittedEvents.FrameAttached,
@@ -2054,6 +2054,18 @@ export class Page extends EventEmitter {
         timeout,
         this._sessionClosePromise()
       ),
+    ]);
+
+    return Promise.race([
+      eventRace,
+      (async () => {
+        for (const frame of this.frames()) {
+          if (await predicate(frame)) {
+            return frame;
+          }
+        }
+        await eventRace;
+      })(),
     ]);
   }
 
@@ -2812,7 +2824,7 @@ export class Page extends EventEmitter {
   }
 
   /**
-   * Generatees a PDF of the page with the `print` CSS media type.
+   * Generates a PDF of the page with the `print` CSS media type.
    * @remarks
    *
    * NOTE: PDF generation is only supported in Chrome headless mode.

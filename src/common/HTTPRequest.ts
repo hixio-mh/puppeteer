@@ -13,7 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { CDPSession } from './Connection.js';
+import { ProtocolMapping } from 'devtools-protocol/types/protocol-mapping.js';
+
+import { EventEmitter } from './EventEmitter.js';
 import { Frame } from './FrameManager.js';
 import { HTTPResponse } from './HTTPResponse.js';
 import { assert } from './assert.js';
@@ -32,6 +34,14 @@ export interface ContinueRequestOverrides {
   method?: string;
   postData?: string;
   headers?: Record<string, string>;
+}
+
+/**
+ * @public
+ */
+export interface InterceptResolutionState {
+  action: InterceptResolutionAction;
+  priority?: number;
 }
 
 /**
@@ -55,6 +65,20 @@ export interface ResponseForRequest {
  * @public
  */
 export type ResourceType = Lowercase<Protocol.Network.ResourceType>;
+
+/**
+ * The default cooperative request interception resolution priority
+ *
+ * @public
+ */
+export const DEFAULT_INTERCEPT_RESOLUTION_PRIORITY = 0;
+
+interface CDPSession extends EventEmitter {
+  send<T extends keyof ProtocolMapping.Commands>(
+    method: T,
+    ...paramArgs: ProtocolMapping.Commands[T]['paramsType']
+  ): Promise<ProtocolMapping.Commands[T]['returnType']>;
+}
 
 /**
  *
@@ -126,11 +150,12 @@ export class HTTPRequest {
   private _headers: Record<string, string> = {};
   private _frame: Frame;
   private _continueRequestOverrides: ContinueRequestOverrides;
-  private _responseForRequest: Partial<ResponseForRequest>;
-  private _abortErrorReason: Protocol.Network.ErrorReason;
-  private _currentStrategy: InterceptResolutionStrategy;
-  private _currentPriority: number | undefined;
-  private _interceptActions: Array<() => void | PromiseLike<any>>;
+  private _responseForRequest: Partial<ResponseForRequest> | null = null;
+  private _abortErrorReason: Protocol.Network.ErrorReason | null = null;
+  private _interceptResolutionState: InterceptResolutionState = {
+    action: InterceptResolutionAction.None,
+  };
+  private _interceptHandlers: Array<() => void | PromiseLike<any>>;
   private _initiator: Protocol.Network.Initiator;
 
   /**
@@ -151,15 +176,13 @@ export class HTTPRequest {
     this._interceptionId = interceptionId;
     this._allowInterception = allowInterception;
     this._url = event.request.url;
-    this._resourceType = event.type.toLowerCase() as ResourceType;
+    this._resourceType = (event.type || 'other').toLowerCase() as ResourceType;
     this._method = event.request.method;
     this._postData = event.request.postData;
     this._frame = frame;
     this._redirectChain = redirectChain;
     this._continueRequestOverrides = {};
-    this._currentStrategy = 'none';
-    this._currentPriority = undefined;
-    this._interceptActions = [];
+    this._interceptHandlers = [];
     this._initiator = event.initiator;
 
     for (const key of Object.keys(event.request.headers))
@@ -187,7 +210,7 @@ export class HTTPRequest {
    * @returns The `ResponseForRequest` that gets used if the
    * interception is allowed to respond (ie, `abort()` is not called).
    */
-  responseForRequest(): Partial<ResponseForRequest> {
+  responseForRequest(): Partial<ResponseForRequest> | null {
     assert(this._allowInterception, 'Request Interception is not enabled!');
     return this._responseForRequest;
   }
@@ -195,32 +218,48 @@ export class HTTPRequest {
   /**
    * @returns the most recent reason for aborting the request
    */
-  abortErrorReason(): Protocol.Network.ErrorReason {
+  abortErrorReason(): Protocol.Network.ErrorReason | null {
     assert(this._allowInterception, 'Request Interception is not enabled!');
     return this._abortErrorReason;
   }
 
   /**
-   * @returns An array of the current intercept resolution strategy and priority
-   * `[strategy,priority]`. Strategy is one of: `abort`, `respond`, `continue`,
+   * @returns An InterceptResolutionState object describing the current resolution
+   *  action and priority.
+   *
+   *  InterceptResolutionState contains:
+   *    action: InterceptResolutionAction
+   *    priority?: number
+   *
+   *  InterceptResolutionAction is one of: `abort`, `respond`, `continue`,
    *  `disabled`, `none`, or `already-handled`.
    */
-  private interceptResolution(): [InterceptResolutionStrategy, number?] {
-    if (!this._allowInterception) return ['disabled'];
-    if (this._interceptionHandled) return ['alreay-handled'];
-    return [this._currentStrategy, this._currentPriority];
+  interceptResolutionState(): InterceptResolutionState {
+    if (!this._allowInterception)
+      return { action: InterceptResolutionAction.Disabled };
+    if (this._interceptionHandled)
+      return { action: InterceptResolutionAction.AlreadyHandled };
+    return { ...this._interceptResolutionState };
+  }
+
+  /**
+   * @returns `true` if the intercept resolution has already been handled,
+   * `false` otherwise.
+   */
+  isInterceptResolutionHandled(): boolean {
+    return this._interceptionHandled;
   }
 
   /**
    * Adds an async request handler to the processing queue.
    * Deferred handlers are not guaranteed to execute in any particular order,
-   * but they are guarnateed to resolve before the request interception
+   * but they are guaranteed to resolve before the request interception
    * is finalized.
    */
   enqueueInterceptAction(
     pendingHandler: () => void | PromiseLike<unknown>
   ): void {
-    this._interceptActions.push(pendingHandler);
+    this._interceptHandlers.push(pendingHandler);
   }
 
   /**
@@ -228,15 +267,18 @@ export class HTTPRequest {
    * the request interception.
    */
   async finalizeInterceptions(): Promise<void> {
-    await this._interceptActions.reduce(
+    await this._interceptHandlers.reduce(
       (promiseChain, interceptAction) => promiseChain.then(interceptAction),
       Promise.resolve()
     );
-    const [resolution] = this.interceptResolution();
-    switch (resolution) {
+    const { action } = this.interceptResolutionState();
+    switch (action) {
       case 'abort':
         return this._abort(this._abortErrorReason);
       case 'respond':
+        if (this._responseForRequest === null) {
+          throw new Error('Response is missing for the interception');
+        }
         return this._respond(this._responseForRequest);
       case 'continue':
         return this._continue(this._continueRequestOverrides);
@@ -351,7 +393,7 @@ export class HTTPRequest {
    *
    * @returns `null` unless the request failed. If the request fails this can
    * return an object with `errorText` containing a human-readable error
-   * message, e.g. `net::ERR_FAILED`. It is not guaranteeded that there will be
+   * message, e.g. `net::ERR_FAILED`. It is not guaranteed that there will be
    * failure text if the request fails.
    */
   failure(): { errorText: string } | null {
@@ -402,21 +444,24 @@ export class HTTPRequest {
     }
     this._continueRequestOverrides = overrides;
     if (
-      priority > this._currentPriority ||
-      this._currentPriority === undefined
+      this._interceptResolutionState.priority === undefined ||
+      priority > this._interceptResolutionState.priority
     ) {
-      this._currentStrategy = 'continue';
-      this._currentPriority = priority;
+      this._interceptResolutionState = {
+        action: InterceptResolutionAction.Continue,
+        priority,
+      };
       return;
     }
-    if (priority === this._currentPriority) {
+    if (priority === this._interceptResolutionState.priority) {
       if (
-        this._currentStrategy === 'abort' ||
-        this._currentStrategy === 'respond'
+        this._interceptResolutionState.action === 'abort' ||
+        this._interceptResolutionState.action === 'respond'
       ) {
         return;
       }
-      this._currentStrategy = 'continue';
+      this._interceptResolutionState.action =
+        InterceptResolutionAction.Continue;
     }
     return;
   }
@@ -489,18 +534,20 @@ export class HTTPRequest {
     }
     this._responseForRequest = response;
     if (
-      priority > this._currentPriority ||
-      this._currentPriority === undefined
+      this._interceptResolutionState.priority === undefined ||
+      priority > this._interceptResolutionState.priority
     ) {
-      this._currentStrategy = 'respond';
-      this._currentPriority = priority;
+      this._interceptResolutionState = {
+        action: InterceptResolutionAction.Respond,
+        priority,
+      };
       return;
     }
-    if (priority === this._currentPriority) {
-      if (this._currentStrategy === 'abort') {
+    if (priority === this._interceptResolutionState.priority) {
+      if (this._interceptResolutionState.action === 'abort') {
         return;
       }
-      this._currentStrategy = 'respond';
+      this._interceptResolutionState.action = InterceptResolutionAction.Respond;
     }
   }
 
@@ -512,12 +559,15 @@ export class HTTPRequest {
         ? Buffer.from(response.body)
         : (response.body as Buffer) || null;
 
-    const responseHeaders: Record<string, string> = {};
+    const responseHeaders: Record<string, string | string[]> = {};
     if (response.headers) {
-      for (const header of Object.keys(response.headers))
-        responseHeaders[header.toLowerCase()] = String(
-          response.headers[header]
-        );
+      for (const header of Object.keys(response.headers)) {
+        const value = response.headers[header];
+
+        responseHeaders[header.toLowerCase()] = Array.isArray(value)
+          ? value.map((item) => String(item))
+          : String(value);
+      }
     }
     if (response.contentType)
       responseHeaders['content-type'] = response.contentType;
@@ -526,11 +576,12 @@ export class HTTPRequest {
         Buffer.byteLength(responseBody)
       );
 
+    const status = response.status || 200;
     await this._client
       .send('Fetch.fulfillRequest', {
         requestId: this._interceptionId,
-        responseCode: response.status || 200,
-        responsePhrase: STATUS_TEXTS[response.status || 200],
+        responseCode: status,
+        responsePhrase: STATUS_TEXTS[status],
         responseHeaders: headersArray(responseHeaders),
         body: responseBody ? responseBody.toString('base64') : undefined,
       })
@@ -568,23 +619,25 @@ export class HTTPRequest {
     }
     this._abortErrorReason = errorReason;
     if (
-      priority >= this._currentPriority ||
-      this._currentPriority === undefined
+      this._interceptResolutionState.priority === undefined ||
+      priority >= this._interceptResolutionState.priority
     ) {
-      this._currentStrategy = 'abort';
-      this._currentPriority = priority;
+      this._interceptResolutionState = {
+        action: InterceptResolutionAction.Abort,
+        priority,
+      };
       return;
     }
   }
 
   private async _abort(
-    errorReason: Protocol.Network.ErrorReason
+    errorReason: Protocol.Network.ErrorReason | null
   ): Promise<void> {
     this._interceptionHandled = true;
     await this._client
       .send('Fetch.failRequest', {
         requestId: this._interceptionId,
-        errorReason,
+        errorReason: errorReason || 'Failed',
       })
       .catch(handleError);
   }
@@ -593,13 +646,21 @@ export class HTTPRequest {
 /**
  * @public
  */
-export type InterceptResolutionStrategy =
-  | 'abort'
-  | 'respond'
-  | 'continue'
-  | 'disabled'
-  | 'none'
-  | 'alreay-handled';
+export enum InterceptResolutionAction {
+  Abort = 'abort',
+  Respond = 'respond',
+  Continue = 'continue',
+  Disabled = 'disabled',
+  None = 'none',
+  AlreadyHandled = 'already-handled',
+}
+
+/**
+ * @public
+ *
+ * @deprecated please use {@link InterceptResolutionAction} instead.
+ */
+export type InterceptResolutionStrategy = InterceptResolutionAction;
 
 /**
  * @public
@@ -643,12 +704,17 @@ const errorReasons: Record<ErrorCode, Protocol.Network.ErrorReason> = {
 export type ActionResult = 'continue' | 'abort' | 'respond';
 
 function headersArray(
-  headers: Record<string, string>
+  headers: Record<string, string | string[]>
 ): Array<{ name: string; value: string }> {
   const result = [];
   for (const name in headers) {
-    if (!Object.is(headers[name], undefined))
-      result.push({ name, value: headers[name] + '' });
+    const value = headers[name];
+
+    if (!Object.is(value, undefined)) {
+      const values = Array.isArray(value) ? value : [value];
+
+      result.push(...values.map((value) => ({ name, value: value + '' })));
+    }
   }
   return result;
 }
@@ -666,7 +732,7 @@ async function handleError(error: ProtocolError) {
 // List taken from
 // https://www.iana.org/assignments/http-status-codes/http-status-codes.xhtml
 // with extra 306 and 418 codes.
-const STATUS_TEXTS = {
+const STATUS_TEXTS: { [key: string]: string | undefined } = {
   '100': 'Continue',
   '101': 'Switching Protocols',
   '102': 'Processing',

@@ -24,6 +24,8 @@ import {
   setupTestPageAndContextHooks,
   itFailsFirefox,
   describeFailsFirefox,
+  itChromeOnly,
+  itFirefoxOnly,
 } from './mocha-utils'; // eslint-disable-line import/extensions
 import { HTTPResponse } from '../lib/cjs/puppeteer/api-docs-entry.js';
 
@@ -113,14 +115,17 @@ describe('network', function () {
   });
 
   describe('Request.headers', function () {
-    it('should work', async () => {
-      const { page, server, isChrome } = getTestState();
+    itChromeOnly('should define Chrome as user agent header', async () => {
+      const { page, server } = getTestState();
+      const response = await page.goto(server.EMPTY_PAGE);
+      expect(response.request().headers()['user-agent']).toContain('Chrome');
+    });
+
+    itFirefoxOnly('should define Firefox as user agent header', async () => {
+      const { page, server } = getTestState();
 
       const response = await page.goto(server.EMPTY_PAGE);
-      if (isChrome)
-        expect(response.request().headers()['user-agent']).toContain('Chrome');
-      else
-        expect(response.request().headers()['user-agent']).toContain('Firefox');
+      expect(response.request().headers()['user-agent']).toContain('Firefox');
     });
   });
 
@@ -138,7 +143,7 @@ describe('network', function () {
   });
 
   describeFailsFirefox('Request.initiator', () => {
-    it('shoud return the initiator', async () => {
+    it('should return the initiator', async () => {
       const { page, server } = getTestState();
 
       const initiators = new Map();
@@ -222,7 +227,10 @@ describe('network', function () {
       const { page, server } = getTestState();
 
       const responses = new Map();
-      page.on('response', (r) => responses.set(r.url().split('/').pop(), r));
+      page.on(
+        'response',
+        (r) => !utils.isFavicon(r) && responses.set(r.url().split('/').pop(), r)
+      );
 
       // Load and re-load to make sure serviceworker is installed and running.
       await page.goto(server.PREFIX + '/serviceworkers/fetch/sw.html', {
@@ -246,7 +254,9 @@ describe('network', function () {
       await page.goto(server.EMPTY_PAGE);
       server.setRoute('/post', (req, res) => res.end());
       let request = null;
-      page.on('request', (r) => (request = r));
+      page.on('request', (r) => {
+        if (!utils.isFavicon(r)) request = r;
+      });
       await page.evaluate(() =>
         fetch('./post', {
           method: 'POST',
@@ -417,6 +427,28 @@ describe('network', function () {
       const response = await page.goto(server.PREFIX + '/cool');
       expect(response.statusText()).toBe('cool!');
     });
+
+    it('handles missing status text', async () => {
+      const { page, server } = getTestState();
+
+      server.setRoute('/nostatus', (req, res) => {
+        res.writeHead(200, '');
+        res.end();
+      });
+      const response = await page.goto(server.PREFIX + '/nostatus');
+      expect(response.statusText()).toBe('');
+    });
+  });
+
+  describeFailsFirefox('Response.timing', function () {
+    it('returns timing information', async () => {
+      const { page, server } = getTestState();
+      const responses = [];
+      page.on('response', (response) => responses.push(response));
+      await page.goto(server.EMPTY_PAGE);
+      expect(responses.length).toBe(1);
+      expect(responses[0].timing().receiveHeadersEnd).toBeGreaterThan(0);
+    });
   });
 
   describeFailsFirefox('Network Events', function () {
@@ -581,7 +613,7 @@ describe('network', function () {
       expect(requests.get('script.js').isNavigationRequest()).toBe(false);
       expect(requests.get('style.css').isNavigationRequest()).toBe(false);
     });
-    it('should work when navigating to image', async () => {
+    itFailsFirefox('should work when navigating to image', async () => {
       const { page, server } = getTestState();
 
       const requests = [];
@@ -625,8 +657,16 @@ describe('network', function () {
       const { page, server } = getTestState();
 
       server.setAuth('/empty.html', 'user', 'pass');
-      let response = await page.goto(server.EMPTY_PAGE);
-      expect(response.status()).toBe(401);
+      let response;
+      try {
+        response = await page.goto(server.EMPTY_PAGE);
+        expect(response.status()).toBe(401);
+      } catch (error) {
+        // In headful, an error is thrown instead of 401.
+        if (!error.message.startsWith('net::ERR_INVALID_AUTH_CREDENTIALS')) {
+          throw error;
+        }
+      }
       await page.authenticate({
         username: 'user',
         password: 'pass',
@@ -659,8 +699,15 @@ describe('network', function () {
       expect(response.status()).toBe(200);
       await page.authenticate(null);
       // Navigate to a different origin to bust Chrome's credential caching.
-      response = await page.goto(server.CROSS_PROCESS_PREFIX + '/empty.html');
-      expect(response.status()).toBe(401);
+      try {
+        response = await page.goto(server.CROSS_PROCESS_PREFIX + '/empty.html');
+        expect(response.status()).toBe(401);
+      } catch (error) {
+        // In headful, an error is thrown instead of 401.
+        if (!error.message.startsWith('net::ERR_INVALID_AUTH_CREDENTIALS')) {
+          throw error;
+        }
+      }
     });
     it('should not disable caching', async () => {
       const { page, server } = getTestState();
@@ -684,6 +731,79 @@ describe('network', function () {
       expect(responses.get('one-style.css').fromCache()).toBe(true);
       expect(responses.get('one-style.html').status()).toBe(304);
       expect(responses.get('one-style.html').fromCache()).toBe(false);
+    });
+  });
+
+  describeFailsFirefox('raw network headers', async () => {
+    it('Same-origin set-cookie navigation', async () => {
+      const { page, server } = getTestState();
+
+      const setCookieString = 'foo=bar';
+      server.setRoute('/empty.html', (req, res) => {
+        res.setHeader('set-cookie', setCookieString);
+        res.end('hello world');
+      });
+      const response = await page.goto(server.EMPTY_PAGE);
+      expect(response.headers()['set-cookie']).toBe(setCookieString);
+    });
+
+    it('Same-origin set-cookie subresource', async () => {
+      const { page, server } = getTestState();
+      await page.goto(server.EMPTY_PAGE);
+
+      const setCookieString = 'foo=bar';
+      server.setRoute('/foo', (req, res) => {
+        res.setHeader('set-cookie', setCookieString);
+        res.end('hello world');
+      });
+
+      const responsePromise = new Promise<HTTPResponse>((resolve) =>
+        page.on('response', (response) => resolve(response))
+      );
+      page.evaluate(() => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', '/foo');
+        xhr.send();
+      });
+      const subresourceResponse = await responsePromise;
+      expect(subresourceResponse.headers()['set-cookie']).toBe(setCookieString);
+    });
+
+    it('Cross-origin set-cookie', async () => {
+      const { httpsServer, puppeteer, defaultBrowserOptions } = getTestState();
+
+      const browser = await puppeteer.launch({
+        ...defaultBrowserOptions,
+        ignoreHTTPSErrors: true,
+      });
+
+      const page = await browser.newPage();
+
+      try {
+        await page.goto(httpsServer.PREFIX + '/empty.html');
+
+        const setCookieString = 'hello=world';
+        httpsServer.setRoute('/setcookie.html', (req, res) => {
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('set-cookie', setCookieString);
+          res.end();
+        });
+        await page.goto(httpsServer.PREFIX + '/setcookie.html');
+
+        const response = await new Promise<HTTPResponse>((resolve) => {
+          page.on('response', resolve);
+          const url = httpsServer.CROSS_PROCESS_PREFIX + '/setcookie.html';
+          page.evaluate<(src: string) => void>((src) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', src);
+            xhr.send();
+          }, url);
+        });
+        expect(response.headers()['set-cookie']).toBe(setCookieString);
+      } finally {
+        await page.close();
+        await browser.close();
+      }
     });
   });
 });

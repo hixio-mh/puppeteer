@@ -19,7 +19,8 @@ yarn.lock
 test/coverage.json
 temp/
 new-docs/
-puppeteer.tgz
+puppeteer*.tgz
 docs-api-json/
 docs-dist/
 website/docs
+docs/api.html

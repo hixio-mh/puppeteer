@@ -21,6 +21,7 @@ module.exports = {
   },
   scripts: {
     prerelease: 'node utils/remove_version_suffix.js',
-    postbump: 'IS_RELEASE=true npm run doc && git add --update',
+    postbump:
+      'node utils/generate_version_file.js && IS_RELEASE=true npm run doc && git add --update',
   },
 };

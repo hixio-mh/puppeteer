@@ -25,6 +25,7 @@ import {
   describeFailsFirefox,
 } from './mocha-utils'; // eslint-disable-line import/extensions
 import { ActionResult } from '../lib/cjs/puppeteer/api-docs-entry.js';
+import { InterceptResolutionAction } from '../lib/cjs/puppeteer/common/HTTPRequest.js';
 
 describe('request interception', function () {
   setupTestBrowserHooks();
@@ -457,7 +458,7 @@ describe('request interception', function () {
       await page.setRequestInterception(true);
       const requests = [];
       page.on('request', (request) => {
-        requests.push(request);
+        !utils.isFavicon(request) && requests.push(request);
         request.continue({}, 0);
       });
       const dataURL = 'data:text/html,<div>yo</div>';
@@ -844,6 +845,22 @@ describe('request interception', function () {
       expect(await page.evaluate(() => document.body.textContent)).toBe(
         'Yo, page!'
       );
+    });
+    it('should indicate already-handled if an intercept has been handled', async () => {
+      const { page, server } = getTestState();
+
+      await page.setRequestInterception(true);
+      page.on('request', (request) => {
+        request.continue();
+      });
+      page.on('request', (request) => {
+        expect(request.isInterceptResolutionHandled()).toBeTruthy();
+      });
+      page.on('request', (request) => {
+        const { action } = request.interceptResolutionState();
+        expect(action).toBe(InterceptResolutionAction.AlreadyHandled);
+      });
+      await page.goto(server.EMPTY_PAGE);
     });
   });
 });

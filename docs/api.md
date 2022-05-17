@@ -10,6 +10,12 @@
 
 <!-- GEN:versions-per-release -->
 - Releases per Chromium version:
+  * Chromium 102.0.5002.0 - [Puppeteer v14.0.0](https://github.com/puppeteer/puppeteer/blob/v14.0.0/docs/api.md)
+  * Chromium 101.0.4950.0 - [Puppeteer v13.6.0](https://github.com/puppeteer/puppeteer/blob/v13.6.0/docs/api.md)
+  * Chromium 100.0.4889.0 - [Puppeteer v13.5.0](https://github.com/puppeteer/puppeteer/blob/v13.5.0/docs/api.md)
+  * Chromium 99.0.4844.16 - [Puppeteer v13.2.0](https://github.com/puppeteer/puppeteer/blob/v13.2.0/docs/api.md)
+  * Chromium 98.0.4758.0 - [Puppeteer v13.1.0](https://github.com/puppeteer/puppeteer/blob/v13.1.0/docs/api.md)
+  * Chromium 97.0.4692.0 - [Puppeteer v12.0.0](https://github.com/puppeteer/puppeteer/blob/v12.0.0/docs/api.md)
   * Chromium 93.0.4577.0 - [Puppeteer v10.2.0](https://github.com/puppeteer/puppeteer/blob/v10.2.0/docs/api.md)
   * Chromium 92.0.4512.0 - [Puppeteer v10.0.0](https://github.com/puppeteer/puppeteer/blob/v10.0.0/docs/api.md)
   * Chromium 91.0.4469.0 - [Puppeteer v9.0.0](https://github.com/puppeteer/puppeteer/blob/v9.0.0/docs/api.md)
@@ -181,8 +187,10 @@
   * [page.setJavaScriptEnabled(enabled)](#pagesetjavascriptenabledenabled)
   * [page.setOfflineMode(enabled)](#pagesetofflinemodeenabled)
   * [page.setRequestInterception(value)](#pagesetrequestinterceptionvalue)
-    - [Cooperative Intercept Mode and Legacy Intercept Mode](#cooperative-intercept-mode-and-legacy-intercept-mode)
-    - [Upgrading to Cooperative Mode for package maintainers](#upgrading-to-cooperative-mode-for-package-maintainers)
+    - [Multiple Intercept Handlers and Asynchronous Resolutions](#multiple-intercept-handlers-and-asynchronous-resolutions)
+    - [Cooperative Intercept Mode](#cooperative-intercept-mode)
+    - [Cooperative Request Continuation](#cooperative-request-continuation)
+    - [Upgrading to Cooperative Intercept Mode for package maintainers](#upgrading-to-cooperative-intercept-mode-for-package-maintainers)
   * [page.setUserAgent(userAgent[, userAgentMetadata])](#pagesetuseragentuseragent-useragentmetadata)
   * [page.setViewport(viewport)](#pagesetviewportviewport)
   * [page.tap(selector)](#pagetapselector)
@@ -333,6 +341,8 @@
   * [elementHandle.toString()](#elementhandletostring)
   * [elementHandle.type(text[, options])](#elementhandletypetext-options)
   * [elementHandle.uploadFile(...filePaths)](#elementhandleuploadfilefilepaths)
+  * [elementHandle.waitForSelector(selector[, options])](#elementhandlewaitforselectorselector-options)
+  * [elementHandle.waitForXPath(xpath[, options])](#elementhandlewaitforxpathxpath-options)
 - [class: HTTPRequest](#class-httprequest)
   * [httpRequest.abort([errorCode], [priority])](#httprequestaborterrorcode-priority)
   * [httpRequest.abortErrorReason()](#httprequestaborterrorreason)
@@ -344,6 +354,8 @@
   * [httpRequest.frame()](#httprequestframe)
   * [httpRequest.headers()](#httprequestheaders)
   * [httpRequest.initiator()](#httprequestinitiator)
+  * [httpRequest.interceptResolutionState()](#httprequestinterceptresolutionstate)
+  * [httpRequest.isInterceptResolutionHandled()](#httprequestisinterceptresolutionhandled)
   * [httpRequest.isNavigationRequest()](#httprequestisnavigationrequest)
   * [httpRequest.method()](#httprequestmethod)
   * [httpRequest.postData()](#httprequestpostdata)
@@ -367,6 +379,7 @@
   * [httpResponse.status()](#httpresponsestatus)
   * [httpResponse.statusText()](#httpresponsestatustext)
   * [httpResponse.text()](#httpresponsetext)
+  * [httpResponse.timing()](#httpresponsetiming)
   * [httpResponse.url()](#httpresponseurl)
 - [class: SecurityDetails](#class-securitydetails)
   * [securityDetails.issuer()](#securitydetailsissuer)
@@ -405,6 +418,7 @@
   * [eventEmitter.removeAllListeners([event])](#eventemitterremovealllistenersevent)
   * [eventEmitter.removeListener(event, handler)](#eventemitterremovelistenerevent-handler)
 - [interface: CustomQueryHandler](#interface-customqueryhandler)
+- [interface: Selector](#interface-selector)
 <!-- GEN:stop -->
 
 <!-- prettier-ignore-end -->
@@ -424,7 +438,7 @@ The Puppeteer API is hierarchical and mirrors the browser structure.
 - [`BrowserContext`](#class-browsercontext) instance defines a browsing session and can own multiple pages.
 - [`Page`](#class-page) has at least one frame: main frame. There might be other frames created by [iframe](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/iframe) or [frame](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/frame) tags.
 - [`Frame`](#class-frame) has at least one execution context - the default execution context - where the frame's JavaScript is executed. A Frame might have additional execution contexts that are associated with [extensions](https://developer.chrome.com/extensions).
-- [`Worker`](#class-worker) has a single execution context and facilitates interacting with [WebWorkers](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API).
+- [`WebWorker`](#class-webworker) has a single execution context and facilitates interacting with [WebWorkers](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API).
 
 (Diagram source: [link](https://docs.google.com/drawings/d/1Q_AM6KYs9kbyLZF-Lpp5mtpAWth73Cq8IKCsWYgi8MM/edit?usp=sharing))
 
@@ -475,6 +489,7 @@ If Puppeteer doesn't find them in the environment during the installation step, 
 - `PUPPETEER_CHROMIUM_REVISION` - specify a certain version of Chromium you'd like Puppeteer to use. See [puppeteer.launch([options])](#puppeteerlaunchoptions) on how executable path is inferred. **BEWARE**: Puppeteer is only [guaranteed to work](https://github.com/puppeteer/puppeteer/#q-why-doesnt-puppeteer-vxxx-work-with-chromium-vyyy) with the bundled Chromium, use at your own risk.
 - `PUPPETEER_EXECUTABLE_PATH` - specify an executable path to be used in `puppeteer.launch`. See [puppeteer.launch([options])](#puppeteerlaunchoptions) on how the executable path is inferred. **BEWARE**: Puppeteer is only [guaranteed to work](https://github.com/puppeteer/puppeteer/#q-why-doesnt-puppeteer-vxxx-work-with-chromium-vyyy) with the bundled Chromium, use at your own risk.
 - `PUPPETEER_PRODUCT` - specify which browser you'd like Puppeteer to use. Must be one of `chrome` or `firefox`. This can also be used during installation to fetch the recommended browser binary. Setting `product` programmatically in [puppeteer.launch([options])](#puppeteerlaunchoptions) supersedes this environment variable. The product is exposed in [`puppeteer.product`](#puppeteerproduct)
+- `PUPPETEER_EXPERIMENTAL_CHROMIUM_MAC_ARM` — specify Puppeteer download Chromium for Apple M1. On Apple M1 devices Puppeteer by default downloads the version for Intel's processor which runs via Rosetta. It works without any problems, however, with this option, you should get more efficient resource usage (CPU and RAM) that could lead to a faster execution time. **BEWARE**: it's an experimental option that makes sense only if you have an Apple M1 device, use at your own risk.
 
 > **NOTE** `PUPPETEER_*` env variables are not accounted for in the [`puppeteer-core`](https://www.npmjs.com/package/puppeteer-core) package.
 
@@ -482,7 +497,7 @@ If Puppeteer doesn't find them in the environment during the installation step, 
 
 Puppeteer can be used for testing Chrome Extensions.
 
-> **NOTE** Extensions in Chrome / Chromium currently only work in non-headless mode.
+> **NOTE** Extensions in Chrome / Chromium currently only work in non-headless mode and experimental Chrome headless mode.
 
 The following is code for getting a handle to the [background page](https://developer.chrome.com/extensions/background_pages) of an extension whose source is located in `./my-extension`:
 
@@ -492,14 +507,13 @@ const puppeteer = require('puppeteer');
 (async () => {
   const pathToExtension = require('path').join(__dirname, 'my-extension');
   const browser = await puppeteer.launch({
-    headless: false,
+    headless: 'chrome',
     args: [
       `--disable-extensions-except=${pathToExtension}`,
       `--load-extension=${pathToExtension}`,
     ],
   });
-  const targets = await browser.targets();
-  const backgroundPageTarget = targets.find(
+  const backgroundPageTarget = await browser.waitForTarget(
     (target) => target.type() === 'background_page'
   );
   const backgroundPage = await backgroundPageTarget.page();
@@ -507,6 +521,8 @@ const puppeteer = require('puppeteer');
   await browser.close();
 })();
 ```
+
+> **NOTE** Chrome Manifest V3 extensions have a background ServiceWorker of type 'service_worker', instead of a page of type 'background_page'.
 
 > **NOTE** It is not yet possible to test extension popups or content scripts.
 
@@ -568,7 +584,7 @@ This methods attaches Puppeteer to an existing browser instance.
 #### puppeteer.defaultArgs([options])
 
 - `options` <[Object]> Set of configurable options to set on the browser. Can have the following fields:
-  - `headless` <[boolean]> Whether to run browser in [headless mode](https://developers.google.com/web/updates/2017/04/headless-chrome). Defaults to `true` unless the `devtools` option is `true`.
+  - `headless` <[boolean]|"chrome"> Whether to run browser in [headless mode](https://developers.google.com/web/updates/2017/04/headless-chrome). Defaults to `true` unless the `devtools` option is `true`. "chrome" is a new experimental headless mode (use at your own risk).
   - `args` <[Array]<[string]>> Additional arguments to pass to the browser instance. The list of Chromium flags can be found [here](http://peter.sh/experiments/chromium-command-line-switches/).
   - `userDataDir` <[string]> Path to a [User Data Directory](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/user_data_dir.md).
   - `devtools` <[boolean]> Whether to auto-open a DevTools panel for each tab. If this option is `true`, the `headless` option will be set `false`.
@@ -634,7 +650,7 @@ try {
 - `options` <[Object]> Set of configurable options to set on the browser. Can have the following fields:
   - `product` <[string]> Which browser to launch. At this time, this is either `chrome` or `firefox`. See also `PUPPETEER_PRODUCT`.
   - `ignoreHTTPSErrors` <[boolean]> Whether to ignore HTTPS errors during navigation. Defaults to `false`.
-  - `headless` <[boolean]> Whether to run browser in [headless mode](https://developers.google.com/web/updates/2017/04/headless-chrome). Defaults to `true` unless the `devtools` option is `true`.
+  - `headless` <[boolean]|"chrome"> Whether to run browser in [headless mode](https://developers.google.com/web/updates/2017/04/headless-chrome). Defaults to `true` unless the `devtools` option is `true`. "chrome" is a new experimental headless mode (use at your own risk).
   - `channel` <[string]> When specified, Puppeteer will search for the locally installed release channel of Google Chrome and use it to launch. Available values are `chrome`, `chrome-beta`, `chrome-canary`, `chrome-dev`. When channel is specified, `executablePath` cannot be specified.
   - `executablePath` <[string]> Path to a browser executable to run instead of the bundled Chromium. If `executablePath` is a relative path, then it is resolved relative to [current working directory](https://nodejs.org/api/process.html#process_process_cwd). **BEWARE**: Puppeteer is only [guaranteed to work](https://github.com/puppeteer/puppeteer/#q-why-doesnt-puppeteer-vxxx-work-with-chromium-vyyy) with the bundled Chromium, use at your own risk.
   - `slowMo` <[number]> Slows down Puppeteer operations by the specified amount of milliseconds. Useful so that you can see what is going on.
@@ -645,7 +661,7 @@ try {
     - `isMobile` <[boolean]> Whether the `meta viewport` tag is taken into account. Defaults to `false`.
     - `hasTouch`<[boolean]> Specifies if viewport supports touch events. Defaults to `false`
     - `isLandscape` <[boolean]> Specifies if viewport is in landscape mode. Defaults to `false`.
-  - `args` <[Array]<[string]>> Additional arguments to pass to the browser instance. The list of Chromium flags can be found [here](http://peter.sh/experiments/chromium-command-line-switches/), and here is the list of [Firefox flags](https://developer.mozilla.org/en-US/docs/Mozilla/Command_Line_Options).
+  - `args` <[Array]<[string]>> Additional arguments to pass to the browser instance. The list of Chromium flags can be found [here](http://peter.sh/experiments/chromium-command-line-switches/), and here is the list of [Firefox flags](https://wiki.mozilla.org/Firefox/CommandLineOptions).
   - `ignoreDefaultArgs` <[boolean]|[Array]<[string]>> If `true`, then do not use [`puppeteer.defaultArgs()`](#puppeteerdefaultargsoptions). If an array is given, then filter out the given default arguments. Dangerous option; use with care. Defaults to `false`.
   - `handleSIGINT` <[boolean]> Close the browser process on Ctrl-C. Defaults to `true`.
   - `handleSIGTERM` <[boolean]> Close the browser process on SIGTERM. Defaults to `true`.
@@ -710,7 +726,7 @@ The product is set by the `PUPPETEER_PRODUCT` environment variable or the `produ
 - `name` <[string]> The name that the custom query handler will be registered under.
 - `queryHandler` <[CustomQueryHandler]> The [custom query handler](#interface-customqueryhandler) to register.
 
-Registers a [custom query handler](#interface-customqueryhandler). After registration, the handler can be used everywhere where a selector is expected by prepending the selection string with `<name>/`. The name is only allowed to consist of lower and upper case Latin letters.
+Registers a [custom query handler](#interface-customqueryhandler).
 
 Example:
 
@@ -894,6 +910,7 @@ Closes Chromium and all of its pages (if any were opened). The [Browser] object 
 During the process of closing the browser, Puppeteer attempts to delete the temp folder created exclusively for this browser instance. If this fails (either because a file in the temp folder is locked by another process or because of insufficient permissions) an error is logged. This implies that: a) the folder and/or its content is not fully deleted; and b) the connection with the browser is not properly disposed (see [browser.disconnect()](#browserdisconnect)).
 
 #### browser.createIncognitoBrowserContext([options])
+
 - `options` <[Object]> Set of configurable options to set on the browserContext. Can have the following fields:
   - `proxyServer` <[string]> Optional proxy server with optional port to use for all requests. Username and password can be set in [page.authenticate(credentials)](#pageauthenticatecredentials).
   - `proxyBypassList` <[string]> Optional: Bypass the proxy for the given semi-colon-separated list of hosts.
@@ -963,7 +980,7 @@ the method will return an array with all the targets in all browser contexts.
 
 - returns: <[Promise]<[string]>> Promise which resolves to the browser's original user agent.
 
-> **NOTE** Pages can override browser user agent with [page.setUserAgent](#pagesetuseragentuseragent-useragentdata)
+> **NOTE** Pages can override browser user agent with [page.setUserAgent](#pagesetuseragentuseragent-useragentmetadata)
 
 #### browser.version()
 
@@ -973,7 +990,7 @@ the method will return an array with all the targets in all browser contexts.
 
 #### browser.waitForTarget(predicate[, options])
 
-- `predicate` <[function]\([Target]\):[boolean]> A function to be run for every target
+- `predicate` <[function]\([Target]\):[boolean]|[Promise<boolean>]> A function to be run for every target
 - `options` <[Object]>
   - `timeout` <[number]> Maximum wait time in milliseconds. Pass `0` to disable the timeout. Defaults to 30 seconds.
 - returns: <[Promise]<[Target]>> Promise which resolves to the first target found that matches the `predicate` function.
@@ -1125,7 +1142,7 @@ An array of all active targets inside the browser context.
 
 #### browserContext.waitForTarget(predicate[, options])
 
-- `predicate` <[function]\([Target]\):[boolean]> A function to be run for every target
+- `predicate` <[function]\([Target]\):[boolean]|[Promise<boolean>]> A function to be run for every target
 - `options` <[Object]>
   - `timeout` <[number]> Maximum wait time in milliseconds. Pass `0` to disable the timeout. Defaults to 30 seconds.
 - returns: <[Promise]<[Target]>> Promise which resolves to the first target found that matches the `predicate` function.
@@ -1453,7 +1470,7 @@ Get the browser context that the page belongs to.
 
 - `selector` <[string]> A [selector] to search for element to click. If there are multiple elements satisfying the selector, the first will be clicked.
 - `options` <[Object]>
-  - `button` <"left"|"right"|"middle"> Defaults to `left`.
+  - `button` <"left"|"right"|"middle"|"back"|"forward"> Defaults to `left`.
   - `clickCount` <[number]> defaults to 1. See [UIEvent.detail].
   - `delay` <[number]> Time to wait between `mousedown` and `mouseup` in milliseconds. Defaults to 0.
 - returns: <[Promise]> Promise which resolves when the element matching `selector` is successfully clicked. The Promise will be rejected if there is no element matching `selector`.
@@ -1584,7 +1601,7 @@ const puppeteer = require('puppeteer');
 
 Emulates given device metrics and user agent. This method is a shortcut for calling two methods:
 
-- [page.setUserAgent(userAgent)](#pagesetuseragentuseragent-useragentdata)
+- [page.setUserAgent(userAgent)](#pagesetuseragentuseragent-useragentmetadata)
 - [page.setViewport(viewport)](#pagesetviewportviewport)
 
 To aid emulation, Puppeteer provides a list of device descriptors that can be obtained via the [`puppeteer.devices`](#puppeteerdevices).
@@ -2194,7 +2211,7 @@ Shortcut for [page.mainFrame().executionContext().queryObjects(prototypeHandle)]
     - `height` <[number]> height of clipping area
   - `omitBackground` <[boolean]> Hides default white background and allows capturing screenshots with transparency. Defaults to `false`.
   - `encoding` <[string]> The encoding of the image, can be either `base64` or `binary`. Defaults to `binary`.
-  - `captureBeyondViewport` <[boolean]> When true, captures screenshot [beyond the viewport](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureScreenshot). Whe false, falls back to old behaviour, and cuts the screenshot by the viewport size. Defaults to `true`.
+  - `captureBeyondViewport` <[boolean]> When true, captures screenshot [beyond the viewport](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureScreenshot). When false, falls back to old behaviour, and cuts the screenshot by the viewport size. Defaults to `true`.
 - returns: <[Promise]<[string]|[Buffer]>> Promise which resolves to buffer or a base64 string (depending on the value of `encoding`) with captured screenshot.
 
 > **NOTE** Screenshots take at least 1/6 second on OS X. See https://crbug.com/741689 for discussion.
@@ -2304,7 +2321,7 @@ This setting will change the default maximum time for the following methods and 
 - `enabled` <[boolean]>
 - returns: <[Promise]>
 
-Enables the Input.drag methods. This provides the capability to cpature drag events emitted on the page, which can then be used to simulate drag-and-drop.
+Enables the Input.drag methods. This provides the capability to capture drag events emitted on the page, which can then be used to simulate drag-and-drop.
 
 #### page.setExtraHTTPHeaders(headers)
 
@@ -2363,6 +2380,7 @@ const puppeteer = require('puppeteer');
   const page = await browser.newPage();
   await page.setRequestInterception(true);
   page.on('request', (interceptedRequest) => {
+    if (interceptedRequest.isInterceptResolutionHandled()) return;
     if (
       interceptedRequest.url().endsWith('.png') ||
       interceptedRequest.url().endsWith('.jpg')
@@ -2375,17 +2393,140 @@ const puppeteer = require('puppeteer');
 })();
 ```
 
-##### Cooperative Intercept Mode and Legacy Intercept Mode
+##### Multiple Intercept Handlers and Asynchronous Resolutions
 
-`request.respond`, `request.abort`, and `request.continue` can accept an optional `priority` to activate Cooperative Intercept Mode. In Cooperative Mode, all intercept handlers are guaranteed to run and all async handlers are awaited. The interception is resolved to the highest-priority resolution. Here are the rules of Cooperative Mode:
+By default Puppeteer will raise a `Request is already handled!` exception if `request.abort`, `request.continue`, or `request.respond` are called after any of them have already been called.
 
+Always assume that an unknown handler may have already called `abort/continue/respond`. Even if your handler is the only one you registered,
+3rd party packages may register their own handlers. It is therefore
+important to always check the resolution status using [request.isInterceptResolutionHandled](#httprequestisinterceptresolutionhandled)
+before calling `abort/continue/respond`.
+
+Importantly, the intercept resolution may get handled by another listener while your handler is awaiting an asynchronous operation. Therefore, the return value of `request.isInterceptResolutionHandled` is only safe in a synchronous code block. Always execute `request.isInterceptResolutionHandled` and `abort/continue/respond` **synchronously** together.
+
+This example demonstrates two synchronous handlers working together:
+
+```js
+/*
+This first handler will succeed in calling request.continue because the request interception has never been resolved.
+*/
+page.on('request', (interceptedRequest) => {
+  if (interceptedRequest.isInterceptResolutionHandled()) return;
+  interceptedRequest.continue();
+});
+
+/*
+This second handler will return before calling request.abort because request.continue was already
+called by the first handler.
+*/
+page.on('request', (interceptedRequest) => {
+  if (interceptedRequest.isInterceptResolutionHandled()) return;
+  interceptedRequest.abort();
+});
+```
+
+This example demonstrates asynchronous handlers working together:
+
+```js
+/*
+This first handler will succeed in calling request.continue because the request interception has never been resolved.
+*/
+page.on('request', (interceptedRequest) => {
+  // The interception has not been handled yet. Control will pass through this guard.
+  if (interceptedRequest.isInterceptResolutionHandled()) return;
+
+  // It is not strictly necessary to return a promise, but doing so will allow Puppeteer to await this handler.
+  return new Promise((resolve) => {
+    // Continue after 500ms
+    setTimeout(() => {
+      // Inside, check synchronously to verify that the intercept wasn't handled already.
+      // It might have been handled during the 500ms while the other handler awaited an async op of its own.
+      if (interceptedRequest.isInterceptResolutionHandled()) {
+        resolve();
+        return;
+      }
+      interceptedRequest.continue();
+      resolve();
+    }, 500);
+  });
+});
+page.on('request', async (interceptedRequest) => {
+  // The interception has not been handled yet. Control will pass through this guard.
+  if (interceptedRequest.isInterceptResolutionHandled()) return;
+
+  await someLongAsyncOperation();
+  // The interception *MIGHT* have been handled by the first handler, we can't be sure.
+  // Therefore, we must check again before calling continue() or we risk Puppeteer raising an exception.
+  if (interceptedRequest.isInterceptResolutionHandled()) return;
+  interceptedRequest.continue();
+});
+```
+
+For finer-grained introspection (see Cooperative Intercept Mode below), you may also call [request.interceptResolutionState](#httprequestinterceptresolutionstate) synchronously before using `abort/continue/respond`.
+
+Here is the example above rewritten using `request.interceptResolutionState`
+
+```js
+/*
+This first handler will succeed in calling request.continue because the request interception has never been resolved.
+*/
+page.on('request', (interceptedRequest) => {
+  // The interception has not been handled yet. Control will pass through this guard.
+  const { action } = interceptedRequest.interceptResolutionState();
+  if (action === InterceptResolutionAction.AlreadyHandled) return;
+
+  // It is not strictly necessary to return a promise, but doing so will allow Puppeteer to await this handler.
+  return new Promise((resolve) => {
+    // Continue after 500ms
+    setTimeout(() => {
+      // Inside, check synchronously to verify that the intercept wasn't handled already.
+      // It might have been handled during the 500ms while the other handler awaited an async op of its own.
+      const { action } = interceptedRequest.interceptResolutionState();
+      if (action === InterceptResolutionAction.AlreadyHandled) {
+        resolve();
+        return;
+      }
+      interceptedRequest.continue();
+      resolve();
+    }, 500);
+  });
+});
+page.on('request', async (interceptedRequest) => {
+  // The interception has not been handled yet. Control will pass through this guard.
+  if (
+    interceptedRequest.interceptResolutionState().action ===
+    InterceptResolutionAction.AlreadyHandled
+  )
+    return;
+
+  await someLongAsyncOperation();
+  // The interception *MIGHT* have been handled by the first handler, we can't be sure.
+  // Therefore, we must check again before calling continue() or we risk Puppeteer raising an exception.
+  if (
+    interceptedRequest.interceptResolutionState().action ===
+    InterceptResolutionAction.AlreadyHandled
+  )
+    return;
+  interceptedRequest.continue();
+});
+```
+
+##### Cooperative Intercept Mode
+
+`request.abort`, `request.continue`, and `request.respond` can accept an optional `priority` to work in Cooperative Intercept Mode. When all
+handlers are using Cooperative Intercept Mode, Puppeteer guarantees that all intercept handlers will run and be awaited in order of registration. The interception is resolved to the highest-priority resolution. Here are the rules of Cooperative Intercept Mode:
+
+- All resolutions must supply a numeric `priority` argument to `abort/continue/respond`.
+- If any resolution does not supply a numeric `priority`, Legacy Mode is active and Cooperative Intercept Mode is inactive.
 - Async handlers finish before intercept resolution is finalized.
 - The highest priority interception resolution "wins", i.e. the interception is ultimately aborted/responded/continued according to which resolution was given the highest priority.
 - In the event of a tie, `abort` > `respond` > `continue`.
 
-For standardization, when specifying a Cooperative Mode priority use `0` unless you have a clear reason to use a higher priority. This gracefully prefers `respond` over `continue` and `abort` over `respond`. If you do intentionally want to use a different priority, higher priorities win over lower priorities. Negative priorities are allowed. For example, `continue({}, 4)` would win over `continue({}, -2)`.
+For standardization, when specifying a Cooperative Intercept Mode priority use `0` or `DEFAULT_INTERCEPT_RESOLUTION_PRIORITY` (exported from `HTTPRequest`) unless you have a clear reason to use a higher priority. This gracefully prefers `respond` over `continue` and `abort` over `respond` and allows other handlers to work cooperatively. If you do intentionally want to use a different priority, higher priorities win over lower priorities. Negative priorities are allowed. For example, `continue({}, 4)` would win over `continue({}, -2)`.
 
-To preserve backward compatibility, any handler resolving the intercept without specifying `priority` (Legacy Mode) causes immediate resolution. For Cooperative Mode to work, all resolutions must use a `priority`.
+To preserve backward compatibility, any handler resolving the intercept without specifying `priority` (Legacy Mode) causes immediate resolution. For Cooperative Intercept Mode to work, all resolutions must use a `priority`. In practice, this means you must still test for
+`request.isInterceptResolutionHandled` because a handler beyond your control may have called `abort/continue/respond` without a
+priority (Legacy Mode).
 
 In this example, Legacy Mode prevails and the request is aborted immediately because at least one handler omits `priority` when resolving the intercept:
 
@@ -2393,17 +2534,16 @@ In this example, Legacy Mode prevails and the request is aborted immediately bec
 // Final outcome: immediate abort()
 page.setRequestInterception(true);
 page.on('request', (request) => {
+  if (request.isInterceptResolutionHandled()) return;
+
   // Legacy Mode: interception is aborted immediately.
   request.abort('failed');
 });
 page.on('request', (request) => {
-  // ['already-handled'], meaning a legacy resolution has taken place
-  console.log(request.interceptResolution());
+  if (request.isInterceptResolutionHandled()) return;
+  // Control will never reach this point because the request was already aborted in Legacy Mode
 
-  // Cooperative Mode: votes for continue at priority 0.
-  // Ultimately throws an exception after all handlers have finished
-  // running and Cooperative Mode resolutions are evaluated becasue
-  // abort() was called using Legacy Mode.
+  // Cooperative Intercept Mode: votes for continue at priority 0.
   request.continue({}, 0);
 });
 ```
@@ -2414,73 +2554,109 @@ In this example, Legacy Mode prevails and the request is continued because at le
 // Final outcome: immediate continue()
 page.setRequestInterception(true);
 page.on('request', (request) => {
-  // Cooperative Mode: votes to abort at priority 0.
-  // Ultimately throws an exception after all handlers have finished
-  // running and Cooperative Mode resolutions are evaluated becasue
-  // continue() was called using Legacy Mode.
+  if (request.isInterceptResolutionHandled()) return;
+
+  // Cooperative Intercept Mode: votes to abort at priority 0.
   request.abort('failed', 0);
 });
 page.on('request', (request) => {
-  // ['abort', 0], meaning an abort @ 0 is the current winning resolution
-  console.log(request.interceptResolution());
+  if (request.isInterceptResolutionHandled()) return;
+
+  // Control reaches this point because the request was cooperatively aborted which postpones resolution.
+
+  // { action: InterceptResolutionAction.Abort, priority: 0 }, because abort @ 0 is the current winning resolution
+  console.log(request.interceptResolutionState());
 
   // Legacy Mode: intercept continues immediately.
   request.continue({});
 });
+page.on('request', (request) => {
+  // { action: InterceptResolutionAction.AlreadyHandled }, because continue in Legacy Mode was called
+  console.log(request.interceptResolutionState());
+});
 ```
 
-In this example, Cooperative Mode is active because all handlers specify a `priority`. `continue()` wins because it has a higher priority than `abort()`.
+In this example, Cooperative Intercept Mode is active because all handlers specify a `priority`. `continue()` wins because it has a higher priority than `abort()`.
 
 ```ts
 // Final outcome: cooperative continue() @ 5
 page.setRequestInterception(true);
 page.on('request', (request) => {
-  // Cooperative Mode: votes to abort at priority 10
+  if (request.isInterceptResolutionHandled()) return;
+
+  // Cooperative Intercept Mode: votes to abort at priority 10
   request.abort('failed', 0);
 });
 page.on('request', (request) => {
-  // Cooperative Mode: votes to continue at priority 5
+  if (request.isInterceptResolutionHandled()) return;
+
+  // Cooperative Intercept Mode: votes to continue at priority 5
   request.continue(request.continueRequestOverrides(), 5);
 });
 page.on('request', (request) => {
-  // ['continue', 5], because continue @ 5 > abort @ 0
-  console.log(request.interceptResolution());
+  // { action: InterceptResolutionAction.Continue, priority: 5 }, because continue @ 5 > abort @ 0
+  console.log(request.interceptResolutionState());
 });
 ```
 
-In this example, Cooperative Mode is active because all handlers specify `priority`. `respond()` wins because its priority ties with `continue()`, but `respond()` beats `continue()`.
+In this example, Cooperative Intercept Mode is active because all handlers specify `priority`. `respond()` wins because its priority ties with `continue()`, but `respond()` beats `continue()`.
 
 ```ts
 // Final outcome: cooperative respond() @ 15
 page.setRequestInterception(true);
 page.on('request', (request) => {
-  // Cooperative Mode: votes to abort at priority 10
+  if (request.isInterceptResolutionHandled()) return;
+
+  // Cooperative Intercept Mode: votes to abort at priority 10
   request.abort('failed', 10);
 });
 page.on('request', (request) => {
-  // Cooperative Mode: votes to continue at priority 15
+  if (request.isInterceptResolutionHandled()) return;
+
+  // Cooperative Intercept Mode: votes to continue at priority 15
   request.continue(request.continueRequestOverrides(), 15);
 });
 page.on('request', (request) => {
-  // Cooperative Mode: votes to respond at priority 15
+  if (request.isInterceptResolutionHandled()) return;
+
+  // Cooperative Intercept Mode: votes to respond at priority 15
   request.respond(request.responseForRequest(), 15);
 });
 page.on('request', (request) => {
-  // Cooperative Mode: votes to respond at priority 12
+  if (request.isInterceptResolutionHandled()) return;
+
+  // Cooperative Intercept Mode: votes to respond at priority 12
   request.respond(request.responseForRequest(), 12);
 });
 page.on('request', (request) => {
-  // ['respond', 15], because respond @ 15 > continue @ 15 > respond @ 12 > abort @ 10
-  console.log(request.interceptResolution());
+  // { action: InterceptResolutionAction.Respond, priority: 15 }, because respond @ 15 > continue @ 15 > respond @ 12 > abort @ 10
+  console.log(request.interceptResolutionState());
 });
 ```
 
-##### Upgrading to Cooperative Mode for package maintainers
+##### Cooperative Request Continuation
 
-If you are package maintainer and your package uses intercept handlers, you can update your intercept handlers to use Cooperative Mode. Suppose you have the following existing handler:
+Puppeteer requires `request.continue()` to be called explicitly or the request will hang. Even if
+your handler means to take no special action, or 'opt out', `request.continue()` must still be called.
+
+With the introduction of Cooperative Intercept Mode, two use cases arise for cooperative request continuations:
+Unopinionated and Opinionated.
+
+The first case (common) is that your handler means to opt out of doing anything special the request. It has no opinion on further action and simply intends to continue by default and/or defer to other handlers that might have an opinion. But in case there are no other handlers, we must call `request.continue()` to ensure that the request doesn't hang.
+
+We call this an **Unopinionated continuation** because the intent is to continue the request if nobody else has a better idea. Use `request.continue({...}, DEFAULT_INTERCEPT_RESOLUTION_PRIORITY)` (or `0`) for this type of continuation.
+
+The second case (uncommon) is that your handler actually does have an opinion and means to force continuation by overriding a lower-priority `abort()` or `respond()` issued elsewhere. We call this an **Opinionated continuation**. In these rare cases where you mean to specify an overriding continuation priority, use a custom priority.
+
+To summarize, reason through whether your use of `request.continue` is just meant to be default/bypass behavior vs falling within the intended use case of your handler. Consider using a custom priority for in-scope use cases, and a default priority otherwise. Be aware that your handler may have both Opinionated and Unopinionated cases.
+
+##### Upgrading to Cooperative Intercept Mode for package maintainers
+
+If you are package maintainer and your package uses intercept handlers, you can update your intercept handlers to use Cooperative Intercept Mode. Suppose you have the following existing handler:
 
 ```ts
 page.on('request', (interceptedRequest) => {
+  if (request.isInterceptResolutionHandled()) return;
   if (
     interceptedRequest.url().endsWith('.png') ||
     interceptedRequest.url().endsWith('.jpg')
@@ -2490,10 +2666,11 @@ page.on('request', (interceptedRequest) => {
 });
 ```
 
-To use Cooperative Mode, upgrade `continue()` and `abort()`:
+To use Cooperative Intercept Mode, upgrade `continue()` and `abort()`:
 
 ```ts
 page.on('request', (interceptedRequest) => {
+  if (request.isInterceptResolutionHandled()) return;
   if (
     interceptedRequest.url().endsWith('.png') ||
     interceptedRequest.url().endsWith('.jpg')
@@ -2507,24 +2684,29 @@ page.on('request', (interceptedRequest) => {
 });
 ```
 
-With those simple upgrades, your handler now uses Cooperative Mode instead.
+With those simple upgrades, your handler now uses Cooperative Intercept Mode instead.
 
-However, we recommend a slightly more robust solution because the above introduces two subtle issues:
+However, we recommend a slightly more robust solution because the above introduces several subtle issues:
 
-1. **Backward compatibility.** Cooperative Mode resolves interceptions only if no Legacy Mode resolution has taken place. If any handler uses a Legacy Mode resolution (ie, does not specify a priority), that handler will resolve the interception immediately even if your handler runs first. This could cause disconcerting behavior for your users because suddenly your handler is not resolving the interception and a different handler is taking priority when all they did was upgrade your package.
+1. **Backward compatibility.** If any handler still uses a Legacy Mode resolution (ie, does not specify a priority), that handler will resolve the interception immediately even if your handler runs first. This could cause disconcerting behavior for your users because suddenly your handler is not resolving the interception and a different handler is taking priority when all the user did was upgrade your package.
 2. **Hard-coded priority.** Your package user has no ability to specify the default resolution priority for your handlers. This can become important when the user wishes to manipulate the priorities based on use case. For example, one user might want your package to take a high priority while another user might want it to take a low priority.
 
-To resolve both of these issues, our recommended approach is to export a `setInterceptResolutionStrategy()` from your package. The user can then call `setInterceptResolutionStrategy()` to explicitly activate Cooperative Mode in your package so they aren't surprised by changes in how the interception is resolved. They can also optionally specify a custom priority using `setInterceptResolutionStrategy(priority)` that works for their use case:
+To resolve both of these issues, our recommended approach is to export a `setInterceptResolutionConfig()` from your package. The user can then call `setInterceptResolutionConfig()` to explicitly activate Cooperative Intercept Mode in your package so they aren't surprised by changes in how the interception is resolved. They can also optionally specify a custom priority using `setInterceptResolutionConfig(priority)` that works for their use case:
 
 ```ts
 // Defaults to undefined which preserves Legacy Mode behavior
 let _priority = undefined;
 
 // Export a module configuration function
-export const setInterceptResolutionStrategy = (defaultPriority = 0) =>
-  (_priority = defaultPriority);
+export const setInterceptResolutionConfig = (priority = 0) =>
+  (_priority = priority);
 
+/**
+ * Note that this handler uses `DEFAULT_INTERCEPT_RESOLUTION_PRIORITY` to "pass" on this request. It is important to use
+ * the default priority when your handler has no opinion on the request and the intent is to continue() by default.
+ */
 page.on('request', (interceptedRequest) => {
+  if (request.isInterceptResolutionHandled()) return;
   if (
     interceptedRequest.url().endsWith('.png') ||
     interceptedRequest.url().endsWith('.jpg')
@@ -2533,48 +2715,55 @@ page.on('request', (interceptedRequest) => {
   else
     interceptedRequest.continue(
       interceptedRequest.continueRequestOverrides(),
-      _priority
+      DEFAULT_INTERCEPT_RESOLUTION_PRIORITY // Unopinionated continuation
     );
 });
 ```
 
-If your package calls for more fine-grained control resolution priorities, use a config pattern like this:
+If your package calls for more fine-grained control over resolution priorities, use a config pattern like this:
 
 ```ts
-interface ResolutionStrategy {
-  abortPriority: number;
-  continuePriority: number;
+interface InterceptResolutionConfig {
+  abortPriority?: number;
+  continuePriority?: number;
 }
 
-// This strategy supports multiple priorities based on situational
-// differences. You could, for example, create a strategy that
+// This approach supports multiple priorities based on situational
+// differences. You could, for example, create a config that
 // allowed separate priorities for PNG vs JPG.
-const DEFAULT_STRATEGY: ResolutionStrategy = {
-  abortPriority: 0,
-  continuePriority: 0,
+const DEFAULT_CONFIG: InterceptResolutionConfig = {
+  abortPriority: undefined, // Default to Legacy Mode
+  continuePriority: undefined, // Default to Legacy Mode
 };
 
 // Defaults to undefined which preserves Legacy Mode behavior
-let _strategy: Partial<ResolutionStrategy> = {};
+let _config: Partial<InterceptResolutionConfig> = {};
 
-export const setInterceptResolutionStrategy = (strategy: ResolutionStrategy) =>
-  (_strategy = { ...DEFAULT_STRATEGY, ...strategy });
+export const setInterceptResolutionConfig = (
+  config: InterceptResolutionConfig
+) => (_config = { ...DEFAULT_CONFIG, ...config });
 
 page.on('request', (interceptedRequest) => {
+  if (request.isInterceptResolutionHandled()) return;
   if (
     interceptedRequest.url().endsWith('.png') ||
     interceptedRequest.url().endsWith('.jpg')
-  )
-    interceptedRequest.abort('failed', _strategy.abortPriority);
-  else
+  ) {
+    interceptedRequest.abort('failed', _config.abortPriority);
+  } else {
+    // Here we use a custom-configured priority to allow for Opinionated
+    // continuation.
+    // We would only want to allow this if we had a very clear reason why
+    // some use cases required Opinionated continuation.
     interceptedRequest.continue(
       interceptedRequest.continueRequestOverrides(),
-      _strategy.continuePriority
+      _config.continuePriority // Why would we ever want priority!==0 here?
     );
+  }
 });
 ```
 
-The above solution ensures backward compatibility while also allowing the user to adjust the importance of your package in the resolution chain when Cooperative Mode is being used. Your package continues to work as expected until the user has fully upgraded their code and all third party packages to use Cooperative Mode. If any handler or package still uses Legacy Mode, your package can still operate in Legacy Mode too.
+The above solutions ensure backward compatibility while also allowing the user to adjust the importance of your package in the resolution chain when Cooperative Intercept Mode is being used. Your package continues to work as expected until the user has fully upgraded their code and all third party packages to use Cooperative Intercept Mode. If any handler or package still uses Legacy Mode, your package can still operate in Legacy Mode too.
 
 #### page.setUserAgent(userAgent[, userAgentMetadata])
 
@@ -2751,7 +2940,7 @@ Shortcut for [page.mainFrame().waitFor(selectorOrFunctionOrTimeout[, options[, .
 
 #### page.waitForFileChooser([options])
 
-- `options` <[WaitTimeoutOptions](####WaitTimeoutOptions)> Optional waiting parameters
+- `options` <[WaitTimeoutOptions](#waittimeoutoptions)> Optional waiting parameters
 - returns: <[Promise]<[FileChooser]>> A promise that resolves after a page requests a file picker.
 
 > **NOTE** In non-headless Chromium, this method results in the native file picker dialog **not showing up** for the user.
@@ -2872,6 +3061,7 @@ const [response] = await Promise.all([
 Shortcut for [page.mainFrame().waitForNavigation(options)](#framewaitfornavigationoptions).
 
 #### page.waitForNetworkIdle([options])
+
 - `options` <[Object]> Optional waiting parameters
   - `timeout` <[number]> Maximum wait time in milliseconds, defaults to 30 seconds, pass `0` to disable the timeout. The default value can be changed by using the [page.setDefaultTimeout(timeout)](#pagesetdefaulttimeouttimeout) method.
   - `idleTime` <[number]> How long to wait for no network requests in milliseconds, defaults to 500 milliseconds.
@@ -3322,7 +3512,7 @@ await browser
 - `x` <[number]>
 - `y` <[number]>
 - `options` <[Object]>
-  - `button` <"left"|"right"|"middle"> Defaults to `left`.
+  - `button` <"left"|"right"|"middle"|"back"|"forward"> Defaults to `left`.
   - `clickCount` <[number]> defaults to 1. See [UIEvent.detail].
   - `delay` <[number]> Time to wait between `mousedown` and `mouseup` in milliseconds. Defaults to 0.
 - returns: <[Promise]>
@@ -3332,7 +3522,7 @@ Shortcut for [`mouse.move`](#mousemovex-y-options), [`mouse.down`](#mousedownopt
 #### mouse.down([options])
 
 - `options` <[Object]>
-  - `button` <"left"|"right"|"middle"> Defaults to `left`.
+  - `button` <"left"|"right"|"middle"|"back"|"forward"> Defaults to `left`.
   - `clickCount` <[number]> defaults to 1. See [UIEvent.detail].
 - returns: <[Promise]>
 
@@ -3407,7 +3597,7 @@ Dispatches a `mousemove` event.
 #### mouse.up([options])
 
 - `options` <[Object]>
-  - `button` <"left"|"right"|"middle"> Defaults to `left`.
+  - `button` <"left"|"right"|"middle"|"back"|"forward"> Defaults to `left`.
   - `clickCount` <[number]> defaults to 1. See [UIEvent.detail].
 - returns: <[Promise]>
 
@@ -3705,7 +3895,7 @@ Adds a `<link rel="stylesheet">` tag into the page with the desired URL or a `<s
 
 - `selector` <[string]> A [selector] to search for element to click. If there are multiple elements satisfying the selector, the first will be clicked.
 - `options` <[Object]>
-  - `button` <"left"|"right"|"middle"> Defaults to `left`.
+  - `button` <"left"|"right"|"middle"|"back"|"forward"> Defaults to `left`.
   - `clickCount` <[number]> defaults to 1. See [UIEvent.detail].
   - `delay` <[number]> Time to wait between `mousedown` and `mouseup` in milliseconds. Defaults to 0.
 - returns: <[Promise]> Promise which resolves when the element matching `selector` is successfully clicked. The Promise will be rejected if there is no element matching `selector`.
@@ -4468,12 +4658,12 @@ This method returns boxes of the element, or `null` if the element is not visibl
 #### elementHandle.click([options])
 
 - `options` <[Object]>
-  - `button` <"left"|"right"|"middle"> Defaults to `left`.
+  - `button` <"left"|"right"|"middle"|"back"|"forward"> Defaults to `left`.
   - `clickCount` <[number]> defaults to 1. See [UIEvent.detail].
   - `delay` <[number]> Time to wait between `mousedown` and `mouseup` in milliseconds. Defaults to 0.
-  - `offset` <[Object]> Offset in pixels relative to the top-left corder of the border box of the element.
-    - `x` <number> x-offset in pixels relative to the top-left corder of the border box of the element.
-    - `y` <number> y-offset in pixels relative to the top-left corder of the border box of the element.
+  - `offset` <[Object]> Offset in pixels relative to the top-left corner of the border box of the element.
+    - `x` <number> x-offset in pixels relative to the top-left corner of the border box of the element.
+    - `y` <number> y-offset in pixels relative to the top-left corner of the border box of the element.
 - returns: <[Promise]> Promise which resolves when the element is successfully clicked. Promise gets rejected if the element is detached from DOM.
 
 This method scrolls element into view if needed, and then uses [page.mouse](#pagemouse) to click in the center of the element.
@@ -4482,8 +4672,8 @@ If the element is detached from DOM, the method throws an error.
 #### elementHandle.clickablePoint([offset])
 
 - `offset` <[Object]>
-  - `x` <number> x-offset in pixels relative to the top-left corder of the border box of the element.
-  - `y` <number> y-offset in pixels relative to the top-left corder of the border box of the element.
+  - `x` <number> x-offset in pixels relative to the top-left corner of the border box of the element.
+  - `y` <number> y-offset in pixels relative to the top-left corner of the border box of the element.
 - returns: <[Promise<[Point]>]> Resolves to the x, y point that describes the element's position.
 
 #### elementHandle.contentFrame()
@@ -4610,6 +4800,7 @@ This method scrolls element into view if needed, and then uses [page.mouse](#pag
 If the element is detached from DOM, the method throws an error.
 
 #### elementHandle.isIntersectingViewport([options])
+
 - `options` <[Object]>
   - `threshold` <[number]> threshold for the intersection between 0 (no intersection) and 1 (full intersection). Defaults to 1.
 - returns: <[Promise]<[boolean]>> Resolves to true if the element is visible in the current viewport.
@@ -4699,6 +4890,57 @@ await elementHandle.press('Enter');
 
 This method expects `elementHandle` to point to an [input element](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input).
 
+#### elementHandle.waitForSelector(selector[, options])
+
+- `selector` <[string]> A [selector] of an element to wait for
+- `options` <[Object]> Optional waiting parameters
+  - `visible` <[boolean]> wait for element to be present in DOM and to be visible, i.e. to not have `display: none` or `visibility: hidden` CSS properties. Defaults to `false`.
+  - `hidden` <[boolean]> wait for element to not be found in the DOM or to be hidden, i.e. have `display: none` or `visibility: hidden` CSS properties. Defaults to `false`.
+  - `timeout` <[number]> maximum time to wait for in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can be changed by using the [page.setDefaultTimeout(timeout)](#pagesetdefaulttimeouttimeout) method.
+- returns: <[Promise]<?[ElementHandle]>> Promise which resolves when element specified by selector string is added to DOM. Resolves to `null` if waiting for `hidden: true` and selector is not found in DOM.
+
+Wait for an element matching `selector` to appear within the `elementHandle`’s subtree. If the `selector` already matches an element at the moment of calling the method, the promise returned by the method resolves immediately. If the selector doesn’t appear after `timeout` milliseconds of waiting, the promise rejects.
+
+This method does not work across navigations or if the element is detached from DOM.
+
+#### elementHandle.waitForXPath(xpath[, options])
+
+- `xpath` <[string]> A [xpath] of an element to wait for
+- `options` <[Object]> Optional waiting parameters
+  - `visible` <[boolean]> wait for element to be present in DOM and to be visible, i.e. to not have `display: none` or `visibility: hidden` CSS properties. Defaults to `false`.
+  - `hidden` <[boolean]> wait for element to not be found in the DOM or to be hidden, i.e. have `display: none` or `visibility: hidden` CSS properties. Defaults to `false`.
+  - `timeout` <[number]> maximum time to wait for in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can be changed by using the [page.setDefaultTimeout(timeout)](#pagesetdefaulttimeouttimeout) method.
+- returns: <[Promise]<?[ElementHandle]>> Promise which resolves when element specified by xpath string is added to DOM. Resolves to `null` if waiting for `hidden: true` and xpath is not found in DOM.
+
+Wait for the `xpath` to appear within the element. If at the moment of calling
+the method the `xpath` already exists, the method will return
+immediately. If the xpath doesn't appear after the `timeout` milliseconds of waiting, the function will throw.
+
+If `xpath` starts with `//` instead of `.//`, the dot will be appended automatically.
+
+This method works across navigations:
+
+```js
+const puppeteer = require('puppeteer');
+
+(async () => {
+  const browser = await puppeteer.launch();
+  const page = await browser.newPage();
+  let currentURL;
+  page
+    .waitForXPath('//img')
+    .then(() => console.log('First URL with image: ' + currentURL));
+  for (currentURL of [
+    'https://example.com',
+    'https://google.com',
+    'https://bbc.com',
+  ]) {
+    await page.goto(currentURL);
+  }
+  await browser.close();
+})();
+```
+
 ### class: HTTPRequest
 
 Whenever the page sends a request, such as for a network resource, the following events are emitted by Puppeteer's page:
@@ -4732,7 +4974,7 @@ If request gets a 'redirect' response, the request is successfully finished with
   - `namenotresolved` - The host name could not be resolved.
   - `timedout` - An operation timed out.
   - `failed` - A generic failure occurred.
-- `priority` <[number]> - Optional intercept abort priority. If provided, intercept will be resolved using [cooperative](#cooperative-intercept-mode-and-legacy-intercept-mode) handling rules. Otherwise, intercept will be resovled immediately.
+- `priority` <[number]> - Optional intercept abort priority. If provided, intercept will be resolved using [cooperative](#cooperative-intercept-mode) handling rules. Otherwise, intercept will be resolved immediately.
 - returns: <[Promise]>
 
 Aborts request. To use this, request interception should be enabled with `page.setRequestInterception`.
@@ -4742,7 +4984,7 @@ Exception is immediately thrown if the request interception is not enabled.
 
 - returns: <[string]> of type [Protocol.Network.ErrorReason](https://chromedevtools.github.io/devtools-protocol/tot/Network/#type-ErrorReason).
 
-Returns the most recent reason for aborting set by the previous call to abort() in Cooperative Mode.
+Returns the most recent reason for aborting set by the previous call to abort() in Cooperative Intercept Mode.
 
 #### httpRequest.continue([overrides], [priority])
 
@@ -4751,15 +4993,20 @@ Returns the most recent reason for aborting set by the previous call to abort() 
   - `method` <[string]> If set changes the request method (e.g. `GET` or `POST`).
   - `postData` <[string]> If set changes the post data of request.
   - `headers` <[Object]> If set changes the request HTTP headers. Header values will be converted to a string.
-- `priority` <[number]> - Optional intercept abort priority. If provided, intercept will be resolved using coopeative handling rules. Otherwise, intercept will be resovled immediately.
+- `priority` <[number]> - Optional intercept abort priority. If provided, intercept will be resolved using coopeative handling rules. Otherwise, intercept will be resolved immediately.
 - returns: <[Promise]>
 
 Continues request with optional request overrides. To use this, request interception should be enabled with `page.setRequestInterception`.
 Exception is immediately thrown if the request interception is not enabled.
 
+Note: Pass `DEFAULT_INTERCEPT_RESOLUTION_PRIORITY` to continue a request if your intent is to bypass/defer the request because
+your handler has no opinion about it.
+
 ```js
 await page.setRequestInterception(true);
 page.on('request', (request) => {
+  if (request.isInterceptResolutionHandled()) return;
+
   // Override headers
   const headers = Object.assign({}, request.headers(), {
     foo: 'bar', // set "foo" header
@@ -4777,7 +5024,7 @@ page.on('request', (request) => {
   - `postData` <[string]> If set changes the post data of request.
   - `headers` <[Object]> If set changes the request HTTP headers. Header values will be converted to a string.
 
-Returns the most recent set of request overrides set with a previous call to continue() in Cooperative Mode.
+Returns the most recent set of request overrides set with a previous call to continue() in Cooperative Intercept Mode.
 
 #### httpRequest.enqueueInterceptAction(pendingHandler)
 
@@ -4805,7 +5052,7 @@ page.on('requestfailed', (request) => {
 
 - returns: <[Promise<unknown>]>
 
-When in Cooperative Mode, awaits pending interception handlers and then decides how to fulfill the request interception.
+When in Cooperative Intercept Mode, awaits pending interception handlers and then decides how to fulfill the request interception.
 
 #### httpRequest.frame()
 
@@ -4822,6 +5069,46 @@ When in Cooperative Mode, awaits pending interception handlers and then decides 
   - `stack` <?[Object]> JavaScript stack trace for the initiator, set for `script` only.
   - `url` <?[string]> Initiator URL, set for `parser`, `script` and `SignedExchange` type.
   - `lineNumber` <?[number]> 0 based initiator line number, set for `parser` and `script`.
+
+#### httpRequest.interceptResolutionState()
+
+- returns: <[InterceptResolutionState]>
+  - `action` <[InterceptResolutionAction]> Current resolution action.
+  - `priority` <?[number]> The current priority of the winning action.
+
+`InterceptResolutionAction` is one of:
+
+- `abort` - The request will be aborted if no higher priority arises.
+- `respond` - The request will be responded if no higher priority arises.
+- `continue` - The request will be continued if no higher priority arises.
+- `disabled` - Request interception is not currently enabled (see `page.setRequestInterception`).
+- `none` - `abort/continue/respond` have not been called yet.
+- `already-handled` - The interception has already been handled in Legacy Mode by a call to `abort/continue/respond` with
+  a `priority` of `undefined`. Subsequent calls to `abort/continue/respond` will throw an exception.
+
+This example will `continue()` a request at a slightly higher priority than the current action if the interception has not
+already handled and is not already being continued.
+
+```js
+page.on('request', (interceptedRequest) => {
+  const { action, priority } = interceptedRequest.interceptResolutionState();
+  if (action === InterceptResolutionAction.AlreadyHandled) return;
+  if (action === InterceptResolutionAction.Continue) return;
+
+  // Change the action to `continue` and bump the priority so `continue` becomes the new winner
+  interceptedRequest.continue(
+    interceptedRequest.continueRequestOverrides(),
+    priority + 1
+  );
+});
+```
+
+#### httpRequest.isInterceptResolutionHandled()
+
+- returns: <[boolean]>
+
+Whether this request's interception has been handled (i.e., `abort`, `continue`, or `respond` has already been called
+with a `priority` of `undefined`).
 
 #### httpRequest.isNavigationRequest()
 
@@ -4878,10 +5165,10 @@ ResourceType will be one of the following: `document`, `stylesheet`, `image`, `m
 
 - `response` <[Object]> Response that will fulfill this request
   - `status` <[number]> Response status code, defaults to `200`.
-  - `headers` <[Object]> Optional response headers. Header values will be converted to a string.
+  - `headers` <[Object]> Optional response headers. Header values should be a string or a string array.
   - `contentType` <[string]> If set, equals to setting `Content-Type` response header
   - `body` <[string]|[Buffer]> Optional response body
-- `priority` <[number]> - Optional intercept abort priority. If provided, intercept will be resolved using coopeative handling rules. Otherwise, intercept will be resovled immediately.
+- `priority` <[number]> - Optional intercept abort priority. If provided, intercept will be resolved using coopeative handling rules. Otherwise, intercept will be resolved immediately.
 - returns: <[Promise]>
 
 Fulfills request with given response. To use this, request interception should
@@ -4893,6 +5180,8 @@ An example of fulfilling all requests with 404 responses:
 ```js
 await page.setRequestInterception(true);
 page.on('request', (request) => {
+  if (request.isInterceptResolutionHandled()) return;
+
   request.respond({
     status: 404,
     contentType: 'text/plain',
@@ -4912,7 +5201,7 @@ page.on('request', (request) => {
 
 - returns: <?[HTTPResponse]> A matching [HTTPResponse] object, or `null` if the response has not been received yet.
 
-Returns the current response object set by the previous call to respond() in Cooperative Mode.
+Returns the current response object set by the previous call to respond() in Cooperative Intercept Mode.
 
 #### httpRequest.url()
 
@@ -4961,8 +5250,8 @@ Contains a boolean stating whether the response was successful (status in the ra
 #### httpResponse.remoteAddress()
 
 - returns: <[Object]>
-  - `ip` <[string]> the IP address of the remote server
-  - `port` <[number]> the port used to connect to the remote server
+  - `ip` <[string]> the IP address of the remote server if known and `undefined` otherwise.
+  - `port` <[number]> the port used to connect to the remote server if known and `undefined` otherwise.
 
 #### httpResponse.request()
 
@@ -4987,6 +5276,30 @@ Contains the status text of the response (e.g. usually an "OK" for a success).
 #### httpResponse.text()
 
 - returns: <[Promise]<[string]>> Promise which resolves to a text representation of response body.
+
+#### httpResponse.timing()
+
+- returns: <?[Object]>
+  - `requestTime` <[number]> baseline in seconds
+  - `proxyStart` <[number]> started resolving proxy (milliseconds since requestTime)
+  - `proxyEnd` <[number]> finished resolving proxy (milliseconds since requestTime)
+  - `dnsStart` <[number]> started DNS address resolve (milliseconds since requestTime)
+  - `dnsEnd` <[number]> finished DNS address resolve (milliseconds since requestTime)
+  - `connectStart` <[number]> started connecting to the remote host (milliseconds since requestTime)
+  - `connectEnd` <[number]> connected to the remote host (milliseconds since requestTime)
+  - `sslStart` <[number]> started SSL handshake (milliseconds since requestTime)
+  - `sslEnd` <[number]> finished SSL handshake (milliseconds since requestTime)
+  - `workerStart` <[number]> started running ServiceWorker (milliseconds since requestTime)
+  - `workerReady` <[number]> finished Starting ServiceWorker (milliseconds since requestTime)
+  - `workerFetchStart` <[number]> started fetch event (milliseconds since requestTime)
+  - `workerRespondWithSettled` <[number]> settled fetch event respondWith promise (milliseconds since requestTime)
+  - `sendStart` <[number]> started sending request (milliseconds since requestTime)
+  - `sendEnd` <[number]> finished sending request (milliseconds since requestTime)
+  - `pushStart` <[number]> time the server started pushing request (milliseconds since requestTime)
+  - `pushEnd` <[number]> time the server finished pushing request (milliseconds since requestTime)
+  - `receiveHeadersEnd` <[number]> finished receiving response headers (milliseconds since requestTime)
+
+Timing information related to the response.
 
 #### httpResponse.url()
 
@@ -5255,7 +5568,31 @@ This method is identical to `off` and maintained for compatibility with Node's E
 
 ### interface: CustomQueryHandler
 
-Contains two functions `queryOne` and `queryAll` that can be [registered](#puppeteerregistercustomqueryhandlername-queryhandler) as alternative querying strategies. The functions `queryOne` and `queryAll` are executed in the page context. `queryOne` should take an `Element` and a selector string as argument and return a single `Element` or `null` if no element is found. `queryAll` takes the same arguments but should instead return a `NodeList<Element>` or `Array<Element>` with all the elements that match the given query selector.
+After [registration](#puppeteerregistercustomqueryhandlername-queryhandler), the handler can be used everywhere where a selector is expected by prepending the selection string with `<name>/`. The name is only allowed to consist of lower and upper case Latin letters.
+
+Contains two functions `queryOne` and `queryAll` that are executed in the page context. `queryOne` should take an `Element` and a selector string as argument and return a single `Element` or `null` if no element is found. `queryAll` takes the same arguments but should instead return a `NodeList<Element>` or `Array<Element>` with all the elements that match the given query selector.
+
+**NOTE:** Because the function code needs to be serialized, it is **not possible** to access anything outside its scope or use imports. See e.g. [the pierce handler](https://github.com/puppeteer/puppeteer/blob/v13.5.2/src/common/QueryHandler.ts#L115) which has redundancies because of this limitation.
+
+### interface: Selector
+
+A selector is a [string] for querying elements in the page.
+The default behavior is to regard the string as a [CSS selector] and query using `querySelector` or `querySelectorAll`.
+If a selector string contains a forward slash `/` the selector is instead regarded as custom selector where everything before the slash is the [custom handler](#puppeteerregistercustomqueryhandlername-queryhandler) name and everything after is the selector: `<handler>/<selector>`.
+Puppeteer ships with two such custom handlers pre-registered:
+
+- `aria`: Queries the accessibilty tree for computed accessibility properties.
+  The selectors consist of an accessible name to query for and optionally
+  further aria attributes on the form `[<attribute>=<value>]`.
+  Currently, we only support the `name` and `role` attribute.
+  The following examples showcase how the syntax works wrt. querying:
+
+  - `title[role="heading"]` queries for elements with name 'title' and role 'heading'.
+  - `[role="img"]` queries for elements with role 'img' and any name.
+  - `label` queries for elements with name 'label' and any role.
+  - `[name=""][role="button"]` queries for elements with no name and role 'button'.
+
+- `pierce`: Takes a [CSS selector] and queries the page using `querySelector` or `querySeletorAll` but pierces through shadow roots.
 
 [axnode]: #accessibilitysnapshotoptions 'AXNode'
 [accessibility]: #class-accessibility 'Accessibility'
@@ -5301,7 +5638,8 @@ Contains two functions `queryOne` and `queryAll` that can be [registered](#puppe
 [iterator]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols 'Iterator'
 [number]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Number_type 'Number'
 [origin]: https://developer.mozilla.org/en-US/docs/Glossary/Origin 'Origin'
-[selector]: https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors 'selector'
+[selector]: #interface-selector 'Selector'
+[css selector]: https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors
 [stream.readable]: https://nodejs.org/api/stream.html#stream_class_stream_readable 'stream.Readable'
 [string]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#String_type 'String'
 [symbol]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Data_structures#Symbol_type 'Symbol'

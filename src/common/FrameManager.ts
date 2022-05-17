@@ -16,7 +16,7 @@
 
 import { EventEmitter } from './EventEmitter.js';
 import { assert } from './assert.js';
-import { helper } from './helper.js';
+import { helper, debugError } from './helper.js';
 import { ExecutionContext, EVALUATION_SCRIPT_URL } from './ExecutionContext.js';
 import {
   LifecycleWatcher,
@@ -53,6 +53,7 @@ export const FrameManagerEmittedEvents = {
   FrameAttached: Symbol('FrameManager.FrameAttached'),
   FrameNavigated: Symbol('FrameManager.FrameNavigated'),
   FrameDetached: Symbol('FrameManager.FrameDetached'),
+  FrameSwapped: Symbol('FrameManager.FrameSwapped'),
   LifecycleEvent: Symbol('FrameManager.LifecycleEvent'),
   FrameNavigatedWithinDocument: Symbol(
     'FrameManager.FrameNavigatedWithinDocument'
@@ -73,7 +74,6 @@ export class FrameManager extends EventEmitter {
   private _contextIdToContext = new Map<string, ExecutionContext>();
   private _isolatedWorlds = new Set<string>();
   private _mainFrame: Frame;
-  private _disconnectPromise?: Promise<Error>;
 
   constructor(
     client: CDPSession,
@@ -108,6 +108,9 @@ export class FrameManager extends EventEmitter {
         );
       }
     );
+    session.on('Page.frameStartedLoading', (event) => {
+      this._onFrameStartedLoading(event.frameId);
+    });
     session.on('Page.frameStoppedLoading', (event) => {
       this._onFrameStoppedLoading(event.frameId);
     });
@@ -136,6 +139,13 @@ export class FrameManager extends EventEmitter {
       const result = await Promise.all([
         client.send('Page.enable'),
         client.send('Page.getFrameTree'),
+        client !== this._client
+          ? client.send('Target.setAutoAttach', {
+              autoAttach: true,
+              waitForDebuggerOnStart: false,
+              flatten: true,
+            })
+          : Promise.resolve(),
       ]);
 
       const { frameTree } = result[1];
@@ -184,7 +194,6 @@ export class FrameManager extends EventEmitter {
     } = options;
 
     const watcher = new LifecycleWatcher(this, frame, waitUntil, timeout);
-    let ensureNewDocumentNavigation = false;
     let error = await Promise.race([
       navigate(this._client, url, referer, frame._id),
       watcher.timeoutOrTerminationPromise(),
@@ -192,14 +201,13 @@ export class FrameManager extends EventEmitter {
     if (!error) {
       error = await Promise.race([
         watcher.timeoutOrTerminationPromise(),
-        ensureNewDocumentNavigation
-          ? watcher.newDocumentNavigationPromise()
-          : watcher.sameDocumentNavigationPromise(),
+        watcher.newDocumentNavigationPromise(),
+        watcher.sameDocumentNavigationPromise(),
       ]);
     }
     watcher.dispose();
     if (error) throw error;
-    return watcher.navigationResponse();
+    return await watcher.navigationResponse();
 
     async function navigate(
       client: CDPSession,
@@ -213,7 +221,6 @@ export class FrameManager extends EventEmitter {
           referrer,
           frameId,
         });
-        ensureNewDocumentNavigation = !!response.loaderId;
         return response.errorText
           ? new Error(`${response.errorText} at ${url}`)
           : null;
@@ -243,7 +250,7 @@ export class FrameManager extends EventEmitter {
     ]);
     watcher.dispose();
     if (error) throw error;
-    return watcher.navigationResponse();
+    return await watcher.navigationResponse();
   }
 
   private async _onAttachedToTarget(
@@ -257,7 +264,7 @@ export class FrameManager extends EventEmitter {
     const session = Connection.fromSession(this._client).session(
       event.sessionId
     );
-    frame._updateClient(session);
+    if (frame) frame._updateClient(session);
     this.setupEventListeners(session);
     await this.initialize(session);
   }
@@ -278,6 +285,12 @@ export class FrameManager extends EventEmitter {
     if (!frame) return;
     frame._onLifecycleEvent(event.loaderId, event.name);
     this.emit(FrameManagerEmittedEvents.LifecycleEvent, frame);
+  }
+
+  _onFrameStartedLoading(frameId: string): void {
+    const frame = this._frames.get(frameId);
+    if (!frame) return;
+    frame._onLoadingStarted();
   }
 
   _onFrameStoppedLoading(frameId: string): void {
@@ -394,11 +407,13 @@ export class FrameManager extends EventEmitter {
       this.frames()
         .filter((frame) => frame._client === session)
         .map((frame) =>
-          session.send('Page.createIsolatedWorld', {
-            frameId: frame._id,
-            worldName: name,
-            grantUniveralAccess: true,
-          })
+          session
+            .send('Page.createIsolatedWorld', {
+              frameId: frame._id,
+              worldName: name,
+              grantUniveralAccess: true,
+            })
+            .catch(debugError)
         )
     );
   }
@@ -421,6 +436,8 @@ export class FrameManager extends EventEmitter {
       // an actual removement of the frame.
       // For frames that become OOP iframes, the reason would be 'swap'.
       if (frame) this._removeFramesRecursively(frame);
+    } else if (reason === 'swap') {
+      this.emit(FrameManagerEmittedEvents.FrameSwapped, frame);
     }
   }
 
@@ -449,7 +466,7 @@ export class FrameManager extends EventEmitter {
       }
     }
     const context = new ExecutionContext(
-      frame._client || this._client,
+      frame?._client || this._client,
       contextPayload,
       world
     );
@@ -639,6 +656,10 @@ export class Frame {
    * @internal
    */
   _name?: string;
+  /**
+   * @internal
+   */
+  _hasStartedLoading = false;
 
   /**
    * @internal
@@ -703,6 +724,11 @@ export class Frame {
     );
   }
 
+  /**
+   * @remarks
+   *
+   * @returns `true` if the frame is an OOP frame, or `false` otherwise.
+   */
   isOOPFrame(): boolean {
     return this._client !== this._frameManager._client;
   }
@@ -787,6 +813,13 @@ export class Frame {
   }
 
   /**
+   * @internal
+   */
+  client(): CDPSession {
+    return this._client;
+  }
+
+  /**
    * @returns a promise that resolves to the frame's default execution context.
    */
   executionContext(): Promise<ExecutionContext> {
@@ -868,7 +901,7 @@ export class Frame {
    *
    * @param selector - the selector to query for
    * @param pageFunction - the function to be evaluated in the frame's context
-   * @param args - additional arguments to pass to `pageFuncton`
+   * @param args - additional arguments to pass to `pageFunction`
    */
   async $eval<ReturnType>(
     selector: string,
@@ -898,7 +931,7 @@ export class Frame {
    *
    * @param selector - the selector to query for
    * @param pageFunction - the function to be evaluated in the frame's context
-   * @param args - additional arguments to pass to `pageFuncton`
+   * @param args - additional arguments to pass to `pageFunction`
    */
   async $$eval<ReturnType>(
     selector: string,
@@ -1391,6 +1424,13 @@ export class Frame {
   _onLoadingStopped(): void {
     this._lifecycleEvents.add('DOMContentLoaded');
     this._lifecycleEvents.add('load');
+  }
+
+  /**
+   * @internal
+   */
+  _onLoadingStarted(): void {
+    this._hasStartedLoading = true;
   }
 
   /**
